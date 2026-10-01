@@ -1,0 +1,110 @@
+/* =========================================================================
+   LAMBO AUTOMOTIVE COCKPIT - MASTER DESIGN SYSTEM
+   Theme: Pure Dark Titanium + Electric Cyan Accent + State Highlights
+   ========================================================================= */
+
+:root {
+  /* Ultra-Dark Deep Automotive Base */
+  --bg-deepest: #05070a;
+  --bg-core: #07090d;
+  --bg-surface: #0b0e14;
+  --bg-elevated: #10141b;
+  --bg-surface-translucent: rgba(11, 14, 20, 0.75);
+
+  /* Primary Accent: Electric Cyan / Hyper Blue */
+  --accent: #00d8f6;
+  --accent-bright: #38edff;
+  --accent-deep: #0284c7;
+  --accent-glow: rgba(0, 216, 246, 0.28);
+  --accent-dim: rgba(0, 216, 246, 0.1);
+  --accent-subtle: rgba(0, 216, 246, 0.04);
+
+  /* Secondary Functional State Accents */
+  --status-green: #10b981;
+  --status-green-glow: rgba(16, 185, 129, 0.3);
+  --status-red: #f43f5e;
+  --status-red-glow: rgba(244, 63, 94, 0.4);
+  --status-amber: #f59e0b;
+  --status-amber-glow: rgba(245, 158, 11, 0.3);
+
+  /* Typography */
+  --text-main: #f8fafc;
+  --text-muted: #94a3b8;
+  --text-dim: #475569;
+  --text-highlight: #ffffff;
+
+  --font-brand: 'Orbitron', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-hud: 'Rajdhani', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'Share Tech Mono', monospace;
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* Surfaces & Borders */
+  --border-hairline: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(0, 216, 246, 0.18);
+  --border-active: rgba(0, 216, 246, 0.65);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+html, body {
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background-color: var(--bg-deepest);
+  color: var(--text-main);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 50%, #0d121c 0%, #07090d 65%, #05070a 100%);
+}
+
+/* Atmospheric Ambient Grid */
+.cockpit-ambient-grid {
+  background-image: 
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+/* Subtle Center Car Spotlight Aura */
+.center-car-aura {
+  background: radial-gradient(circle at 50% 50%, rgba(0, 216, 246, 0.08) 0%, rgba(0, 216, 246, 0.02) 40%, transparent 70%);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 0.85; filter: drop-shadow(0 0 8px var(--accent-glow)); }
+  50% { opacity: 1; filter: drop-shadow(0 0 16px var(--accent)); }
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-core);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-hairline);
+  border-radius: 2px;
+}
