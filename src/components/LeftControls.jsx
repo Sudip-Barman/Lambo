@@ -4,6 +4,8 @@ import { soundEngine } from '../services/soundEngine';
 export default function LeftControls({
   throttle = 0,
   speedKmh = 0,
+  emergencyStopActive = false,
+  isOffline = false,
   onThrottleChange,
   onBrakeStateChange
 }) {
@@ -18,6 +20,13 @@ export default function LeftControls({
     const loop = (currentTime) => {
       const dt = Math.min(0.08, (currentTime - lastTime) / 1000);
       lastTime = currentTime;
+
+      if (emergencyStopActive || isOffline) {
+        onBrakeStateChange(false);
+        if (throttle !== 0) onThrottleChange(0);
+        animFrameRef.current = requestAnimationFrame(loop);
+        return;
+      }
 
       if (pedalRef.current === 'throttle') {
         // Build acceleration smoothly up to 100%
@@ -55,9 +64,10 @@ export default function LeftControls({
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [throttle, speedKmh, onThrottleChange, onBrakeStateChange]);
+  }, [throttle, speedKmh, emergencyStopActive, isOffline, onThrottleChange, onBrakeStateChange]);
 
   const startPedal = (type) => {
+    if (emergencyStopActive || isOffline) return;
     pedalRef.current = type;
     setActivePedal(type);
     soundEngine.playBeep(type === 'throttle' ? 620 : 420, 0.04, 'sawtooth');
@@ -81,7 +91,9 @@ export default function LeftControls({
         justifyContent: 'space-between',
         alignItems: 'center',
         padding: 'clamp(8px, 2vh, 16px) clamp(8px, 1.5vw, 16px)',
-        userSelect: 'none'
+        userSelect: 'none',
+        opacity: emergencyStopActive ? 0.45 : isOffline ? 0.6 : 1,
+        transition: 'opacity 0.2s ease'
       }}
     >
       {/* Top Output Readout */}
@@ -89,12 +101,24 @@ export default function LeftControls({
         style={{
           fontFamily: 'var(--font-mono)',
           fontSize: '11px',
-          color: isReverse ? 'var(--status-red)' : throttlePercent > 0 ? 'var(--accent)' : 'var(--text-dim)',
+          color: emergencyStopActive
+            ? 'var(--status-red)'
+            : isReverse
+            ? 'var(--status-red)'
+            : throttlePercent > 0
+            ? 'var(--accent)'
+            : 'var(--text-dim)',
           marginBottom: '8px',
           letterSpacing: '1px'
         }}
       >
-        {isReverse ? `REV ${Math.abs(Math.round(throttle))}%` : `THROTTLE ${Math.round(throttlePercent)}%`}
+        {emergencyStopActive
+          ? 'MOTORS HALTED'
+          : isOffline
+          ? 'OFFLINE / NO LINK'
+          : isReverse
+          ? `REV ${Math.abs(Math.round(throttle))}%`
+          : `THROTTLE ${Math.round(throttlePercent)}%`}
       </div>
 
       {/* Main Pedals (Left Hand Driving Area) */}
@@ -109,7 +133,7 @@ export default function LeftControls({
           maxHeight: 'clamp(145px, 35vh, 195px)'
         }}
       >
-        {/* THROTTLE / ACCELERATOR PEDAL (Large, comfortable to hold with left thumb) */}
+        {/* THROTTLE / ACCELERATOR PEDAL */}
         <div
           onMouseDown={() => startPedal('throttle')}
           onMouseUp={stopPedal}
@@ -124,7 +148,7 @@ export default function LeftControls({
             backgroundColor: activePedal === 'throttle' ? 'var(--accent-dim)' : 'rgba(16, 20, 27, 0.95)',
             border: `1.5px solid ${activePedal === 'throttle' ? 'var(--accent)' : 'var(--border-hairline)'}`,
             boxShadow: activePedal === 'throttle' ? '0 0 18px var(--accent-glow)' : 'none',
-            cursor: 'pointer',
+            cursor: emergencyStopActive || isOffline ? 'not-allowed' : 'pointer',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -187,7 +211,7 @@ export default function LeftControls({
           <div style={{ width: '70%', height: 3, backgroundColor: '#07090d', borderRadius: 1, zIndex: 2 }} />
         </div>
 
-        {/* BRAKE / REVERSE PEDAL (Right beside accelerator for natural thumb reach) */}
+        {/* BRAKE / REVERSE PEDAL */}
         <div
           onMouseDown={() => startPedal('brake')}
           onMouseUp={stopPedal}
@@ -202,7 +226,7 @@ export default function LeftControls({
             backgroundColor: activePedal === 'brake' ? 'rgba(244, 63, 94, 0.25)' : 'rgba(16, 20, 27, 0.95)',
             border: `1.5px solid ${activePedal === 'brake' ? 'var(--status-red)' : 'rgba(244, 63, 94, 0.35)'}`,
             boxShadow: activePedal === 'brake' ? '0 0 16px var(--status-red-glow)' : 'none',
-            cursor: 'pointer',
+            cursor: emergencyStopActive || isOffline ? 'not-allowed' : 'pointer',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',

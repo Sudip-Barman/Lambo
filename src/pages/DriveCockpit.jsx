@@ -4,40 +4,38 @@ import LeftControls from '../components/LeftControls';
 import CarVisualization from '../components/CarVisualization';
 import RightControls from '../components/RightControls';
 import SettingsPanel from '../components/SettingsPanel';
-import { lamboProtocol } from '../services/lamboProtocol';
+import { vehicleEngine } from '../services/vehicleEngine';
 import { soundEngine } from '../services/soundEngine';
 
 export default function DriveCockpit() {
-  const [telemetry, setTelemetry] = useState(lamboProtocol.state);
-  const [connectionState, setConnectionState] = useState(lamboProtocol.connectionState);
+  const [vehicleState, setVehicleState] = useState(() => vehicleEngine.state);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState('audio');
+  const [settingsTab, setSettingsTab] = useState('connection');
 
-  // Dynamic Physical Velocity (km/h)
+  // Dynamic Physical Velocity (km/h) & Gear
   const [speedKmh, setSpeedKmh] = useState(0);
   const [isBraking, setIsBraking] = useState(false);
-  const [gear, setGear] = useState('D');
+  const [gear, setGear] = useState('P');
 
   const keysPressed = useRef({});
 
-  // Subscribe to protocol
+  // Subscribe to Vehicle Control Engine
   useEffect(() => {
-    const unsubscribe = lamboProtocol.subscribe((updated) => {
-      setTelemetry({ ...updated });
-      setConnectionState(updated.connectionState);
+    const unsubscribe = vehicleEngine.subscribe((updated) => {
+      setVehicleState({ ...updated });
     });
     return unsubscribe;
   }, []);
 
-  // Initialize motor audio engine
+  // Initialize motor audio engine on mount
   useEffect(() => {
     soundEngine.startMotor();
   }, []);
 
   // Update engine sound pitch with speed & throttle
   useEffect(() => {
-    soundEngine.updateMotorSpeed(speedKmh, telemetry.throttle < 0);
-  }, [speedKmh, telemetry.throttle]);
+    soundEngine.updateMotorSpeed(speedKmh, vehicleState.throttle < 0);
+  }, [speedKmh, vehicleState.throttle]);
 
   // Main Vehicle Physics Loop (60 FPS)
   useEffect(() => {
@@ -49,8 +47,16 @@ export default function DriveCockpit() {
       lastTime = currentTime;
 
       setSpeedKmh((prevSpeed) => {
-        const throttle = telemetry.throttle;
-        const mode = telemetry.driveMode;
+        // If emergency stop is engaged or in 360 pivot, speed drops to 0 rapidly
+        if (vehicleState.emergencyStopActive || vehicleState.isRotating360) {
+          const stopped = Math.abs(prevSpeed) < 1 ? 0 : prevSpeed * 0.85;
+          setGear(stopped === 0 ? 'P' : prevSpeed < 0 ? 'R' : 'D');
+          vehicleEngine.updatePhysicsState(stopped, stopped === 0 ? 'P' : prevSpeed < 0 ? 'R' : 'D');
+          return stopped;
+        }
+
+        const throttle = vehicleState.throttle;
+        const mode = vehicleState.driveMode;
 
         const topSpeeds = { ECO: 45, SPORT: 80, TRACK: 120 };
         const maxSpeed = topSpeeds[mode] || 80;
@@ -82,13 +88,16 @@ export default function DriveCockpit() {
         }
 
         // Automatic Transmission Gear
+        let nextGear = 'D';
         if (Math.abs(nextSpeed) < 0.5 && throttle === 0) {
-          setGear('P');
+          nextGear = 'P';
         } else if (nextSpeed < -0.5 || throttle < -5) {
-          setGear('R');
+          nextGear = 'R';
         } else {
-          setGear('D');
+          nextGear = 'D';
         }
+        setGear(nextGear);
+        vehicleEngine.updatePhysicsState(nextSpeed, nextGear);
 
         return nextSpeed;
       });
@@ -99,49 +108,72 @@ export default function DriveCockpit() {
     animId = requestAnimationFrame(physicsLoop);
 
     return () => cancelAnimationFrame(animId);
-  }, [telemetry.throttle, telemetry.driveMode, isBraking]);
+  }, [vehicleState.throttle, vehicleState.driveMode, vehicleState.emergencyStopActive, vehicleState.isRotating360, isBraking]);
 
-  // Actions
+  // Action Dispatchers
   const handleSteerChange = useCallback((value) => {
-    lamboProtocol.handleControl('steering', value);
+    vehicleEngine.setSteering(value);
   }, []);
 
   const handleThrottleChange = useCallback((value) => {
-    lamboProtocol.handleControl('throttle', value);
+    vehicleEngine.setThrottle(value);
   }, []);
 
   const handleBrakeStateChange = useCallback((braking) => {
     setIsBraking(braking);
+    vehicleEngine.setBraking(braking);
+  }, []);
+
+  const handleTrigger360Rotation = useCallback(() => {
+    vehicleEngine.trigger360Rotation();
   }, []);
 
   const handleToggleHeadlights = useCallback(() => {
-    lamboProtocol.handleControl('headlight');
+    vehicleEngine.toggleHeadlights();
   }, []);
 
   const handleHornStart = useCallback(() => {
-    lamboProtocol.handleControl('horn', true);
+    vehicleEngine.startHorn();
   }, []);
 
   const handleHornStop = useCallback(() => {
-    lamboProtocol.handleControl('horn', false);
+    vehicleEngine.stopHorn();
   }, []);
 
   const handleToggleMist = useCallback(() => {
-    lamboProtocol.handleControl('mist');
+    vehicleEngine.toggleMist();
   }, []);
 
-  const handleCycleConnectionState = useCallback(() => {
-    const states = ['CONNECTED', 'CONNECTING', 'DISCONNECTED', 'ERROR'];
-    const next = states[(states.indexOf(connectionState) + 1) % states.length];
-    lamboProtocol.setConnectionState(next);
-  }, [connectionState]);
+  const handleEmergencyStop = useCallback(() => {
+    vehicleEngine.emergencyStop();
+  }, []);
+
+  const handleResetEmergencyStop = useCallback(() => {
+    vehicleEngine.resetEmergencyStop();
+  }, []);
 
   // Global Keyboard Listener
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Don't trigger shortcuts if user is typing in settings input
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+        return;
+      }
+
       const code = e.code;
       if (keysPressed.current[code]) return;
       keysPressed.current[code] = true;
+
+      // Spacebar: Emergency Stop
+      if (code === 'Space') {
+        e.preventDefault();
+        if (vehicleState.emergencyStopActive) {
+          handleResetEmergencyStop();
+        } else {
+          handleEmergencyStop();
+        }
+        return;
+      }
 
       if (code === 'KeyW' || code === 'ArrowUp') {
         handleThrottleChange(85);
@@ -158,19 +190,32 @@ export default function DriveCockpit() {
       if (code === 'KeyD' || code === 'ArrowRight') {
         handleSteerChange(85);
       }
+      if (code === 'KeyR') {
+        handleTrigger360Rotation();
+      }
       if (code === 'KeyL') {
         handleToggleHeadlights();
       }
       if (code === 'KeyH') {
-        soundEngine.startHorn();
         handleHornStart();
       }
       if (code === 'KeyM') {
         handleToggleMist();
       }
+      if (code === 'Escape') {
+        if (isSettingsOpen) {
+          setIsSettingsOpen(false);
+        } else {
+          handleEmergencyStop();
+        }
+      }
     };
 
     const handleKeyUp = (e) => {
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+        return;
+      }
+
       const code = e.code;
       keysPressed.current[code] = false;
 
@@ -185,7 +230,6 @@ export default function DriveCockpit() {
         handleSteerChange(0);
       }
       if (code === 'KeyH') {
-        soundEngine.stopHorn();
         handleHornStop();
       }
     };
@@ -197,7 +241,22 @@ export default function DriveCockpit() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [handleThrottleChange, handleSteerChange, handleToggleHeadlights, handleHornStart, handleHornStop, handleToggleMist, speedKmh]);
+  }, [
+    handleThrottleChange,
+    handleSteerChange,
+    handleTrigger360Rotation,
+    handleToggleHeadlights,
+    handleHornStart,
+    handleHornStop,
+    handleToggleMist,
+    handleEmergencyStop,
+    handleResetEmergencyStop,
+    speedKmh,
+    isSettingsOpen,
+    vehicleState.emergencyStopActive
+  ]);
+
+  const isOffline = vehicleState.connectionState === 'DISCONNECTED' || vehicleState.connectionState === 'ERROR';
 
   return (
     <div
@@ -212,15 +271,71 @@ export default function DriveCockpit() {
       }}
       className="cockpit-ambient-grid"
     >
-      {/* 1. MINIMAL TOP BAR */}
+      {/* 1. TOP HEADER & HUD */}
       <LamboHeader
-        connectionState={connectionState}
-        onCycleConnectionState={handleCycleConnectionState}
+        connectionState={vehicleState.connectionState}
+        connectionMetrics={vehicleState.connectionMetrics}
+        emergencyStopActive={vehicleState.emergencyStopActive}
+        batteryPercent={vehicleState.telemetry.batteryPercent}
+        batteryVoltage={vehicleState.telemetry.batteryVoltage}
         onOpenSettings={(tab) => {
-          setSettingsTab(tab || 'driving');
+          setSettingsTab(tab || 'connection');
           setIsSettingsOpen(true);
         }}
+        onEmergencyStop={handleEmergencyStop}
+        onResetEmergencyStop={handleResetEmergencyStop}
       />
+
+      {/* EMERGENCY STOP SAFETY BANNER */}
+      {vehicleState.emergencyStopActive && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'clamp(46px, 9vh, 54px)',
+            left: 0,
+            right: 0,
+            zIndex: 45,
+            backgroundColor: 'rgba(244, 63, 94, 0.94)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '16px',
+            padding: '6px 16px',
+            boxShadow: '0 4px 20px rgba(244, 63, 94, 0.4)'
+          }}
+        >
+          <span
+            style={{
+              fontFamily: 'var(--font-brand)',
+              fontSize: '12px',
+              fontWeight: 900,
+              letterSpacing: '2px',
+              color: '#ffffff'
+            }}
+          >
+            ⚠ EMERGENCY SHUTDOWN ACTIVE — MOTORS HALTED
+          </span>
+          <button
+            type="button"
+            onClick={handleResetEmergencyStop}
+            style={{
+              backgroundColor: '#ffffff',
+              border: 'none',
+              borderRadius: '3px',
+              padding: '4px 12px',
+              color: '#07090d',
+              fontFamily: 'var(--font-hud)',
+              fontSize: '11px',
+              fontWeight: 800,
+              letterSpacing: '1px',
+              cursor: 'pointer'
+            }}
+          >
+            RESET & RE-ARM
+          </button>
+        </div>
+      )}
 
       {/* 2. THREE-ZONE COCKPIT STAGE: [ LEFT CONTROLS ] | [ CENTER HERO CAR ] | [ RIGHT CONTROLS ] */}
       <main
@@ -234,7 +349,7 @@ export default function DriveCockpit() {
           overflow: 'hidden'
         }}
       >
-        {/* LEFT ZONE: ACCELERATOR & BRAKE / REVERSE (LEFT HAND) */}
+        {/* LEFT ZONE: ACCELERATOR & BRAKE / REVERSE */}
         <section
           aria-label="Left Driving Controls (Accelerator & Brake)"
           style={{
@@ -249,8 +364,10 @@ export default function DriveCockpit() {
           }}
         >
           <LeftControls
-            throttle={telemetry.throttle}
+            throttle={vehicleState.throttle}
             speedKmh={speedKmh}
+            emergencyStopActive={vehicleState.emergencyStopActive}
+            isOffline={isOffline}
             onThrottleChange={handleThrottleChange}
             onBrakeStateChange={handleBrakeStateChange}
           />
@@ -271,18 +388,23 @@ export default function DriveCockpit() {
           className="center-car-aura"
         >
           <CarVisualization
-            throttle={telemetry.throttle}
-            steering={telemetry.steering}
-            headlights={telemetry.headlights}
-            horn={telemetry.horn}
-            mist={telemetry.mist}
+            throttle={vehicleState.throttle}
+            steering={vehicleState.steering}
+            headlights={vehicleState.headlights}
+            horn={vehicleState.horn}
+            mist={vehicleState.mist}
             speedKmh={speedKmh}
             isBraking={isBraking}
             gear={gear}
+            isRotating360={vehicleState.isRotating360}
+            rotationAngle={vehicleState.rotationAngle}
+            sunroof={vehicleState.sunroof}
+            telemetry={vehicleState.telemetry}
+            emergencyStopActive={vehicleState.emergencyStopActive}
           />
         </section>
 
-        {/* RIGHT ZONE: STEERING & AUXILIARY CONTROLS (RIGHT HAND) */}
+        {/* RIGHT ZONE: STEERING (WITH 360 PIVOT CENTER TRIGGER) & AUXILIARY CONTROLS */}
         <section
           aria-label="Right Driving Controls (Steering & Aux)"
           style={{
@@ -297,11 +419,15 @@ export default function DriveCockpit() {
           }}
         >
           <RightControls
-            steering={telemetry.steering}
-            headlights={telemetry.headlights}
-            horn={telemetry.horn}
-            mist={telemetry.mist}
+            steering={vehicleState.steering}
+            isRotating360={vehicleState.isRotating360}
+            emergencyStopActive={vehicleState.emergencyStopActive}
+            isOffline={isOffline}
+            headlights={vehicleState.headlights}
+            horn={vehicleState.horn}
+            mist={vehicleState.mist}
             onSteerChange={handleSteerChange}
+            onTrigger360Rotation={handleTrigger360Rotation}
             onToggleHeadlights={handleToggleHeadlights}
             onHornStart={handleHornStart}
             onHornStop={handleHornStop}
@@ -316,8 +442,6 @@ export default function DriveCockpit() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         initialTab={settingsTab}
-        connectionState={connectionState}
-        onCycleConnectionState={handleCycleConnectionState}
       />
     </div>
   );

@@ -8,7 +8,19 @@ export default function CarVisualization({
   mist = false,         // boolean
   speedKmh = 0,         // km/h
   isBraking = false,
-  gear = 'D'
+  gear = 'D',
+  isRotating360 = false,
+  rotationAngle = 0,    // 0 to 360 degrees
+  sunroof = { state: 'CLOSED', progress: 0 },
+  telemetry = {
+    batteryVoltage: 7.84,
+    batteryPercent: 82,
+    obstacleDistance: 48,
+    obstacleDetected: false,
+    safetyStop: false,
+    lineSensors: { left: false, center: true, right: false }
+  },
+  emergencyStopActive = false
 }) {
   const canvasRef = useRef(null);
   const animFrameRef = useRef(null);
@@ -22,7 +34,8 @@ export default function CarVisualization({
     wheelSpin: 0,       // rotational wheel spin
     mistParticles: [],
     speedDashes: [],
-    hornWave: 0
+    hornWave: 0,
+    pivotParticleOffset: 0
   });
 
   useEffect(() => {
@@ -102,6 +115,7 @@ export default function CarVisualization({
       // Ground travel & wheel spin
       sim.roadOffset = (sim.roadOffset + roadSpeed * dt) % 80;
       sim.wheelSpin += roadSpeed * dt * 0.22;
+      sim.pivotParticleOffset = (sim.pivotParticleOffset + dt * 3.5) % (Math.PI * 2);
 
       // Horn sonic wave cycle
       if (horn) {
@@ -126,15 +140,41 @@ export default function CarVisualization({
 
       // A. Ground Radial Spotlight / Halo under Car
       const groundGlow = ctx.createRadialGradient(0, 0, 20, 0, 0, 190);
-      groundGlow.addColorStop(0, 'rgba(0, 216, 246, 0.07)');
-      groundGlow.addColorStop(0.4, 'rgba(0, 216, 246, 0.02)');
+      groundGlow.addColorStop(0, isRotating360 ? 'rgba(0, 216, 246, 0.16)' : 'rgba(0, 216, 246, 0.07)');
+      groundGlow.addColorStop(0.4, isRotating360 ? 'rgba(0, 216, 246, 0.05)' : 'rgba(0, 216, 246, 0.02)');
       groundGlow.addColorStop(1, 'transparent');
       ctx.fillStyle = groundGlow;
       ctx.beginPath();
       ctx.arc(0, 0, 190, 0, Math.PI * 2);
       ctx.fill();
 
-      // B. Subtle Road Flow Lines / Track Borders
+      // B. 360° PIVOT TRAJECTORY CIRCLE (When 360° pivot mode is active)
+      if (isRotating360) {
+        ctx.strokeStyle = 'rgba(0, 216, 246, 0.35)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([8, 8]);
+        ctx.lineDashOffset = -sim.pivotParticleOffset * 20;
+        ctx.beginPath();
+        ctx.arc(0, 0, 115, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Orbiting glowing beads indicating clockwise rotation
+        for (let b = 0; b < 4; b++) {
+          const bAngle = sim.pivotParticleOffset + (b * Math.PI) / 2;
+          const bx = Math.cos(bAngle) * 115;
+          const by = Math.sin(bAngle) * 115;
+          ctx.fillStyle = '#00d8f6';
+          ctx.shadowColor = '#00d8f6';
+          ctx.shadowBlur = 8;
+          ctx.beginPath();
+          ctx.arc(bx, by, 3, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      // C. Subtle Road Flow Lines / Track Borders
       const roadHalfWidth = 120;
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
       ctx.lineWidth = 1.2;
@@ -162,7 +202,7 @@ export default function CarVisualization({
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // C. Direction Compass / Radar Ring
+      // D. Direction Compass / Radar Ring
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -184,8 +224,8 @@ export default function CarVisualization({
       }
 
       // Dynamic Steering Angle Arc on Compass
-      const headingRad = (sim.carHeading * Math.PI) / 180;
-      if (Math.abs(steering) > 1) {
+      const headingRad = ((sim.carHeading + (isRotating360 ? rotationAngle : 0)) * Math.PI) / 180;
+      if (Math.abs(steering) > 1 || isRotating360) {
         ctx.strokeStyle = 'rgba(0, 216, 246, 0.4)';
         ctx.lineWidth = 2.5;
         ctx.beginPath();
@@ -211,7 +251,7 @@ export default function CarVisualization({
         ctx.shadowBlur = 0;
       }
 
-      // D. Ground Speed Particles & Streaks
+      // Ground Speed Particles & Streaks
       if (Math.abs(velocity) > 1.5) {
         const speedRatio = Math.min(3, Math.abs(velocity) / 35);
         sim.speedDashes.forEach((dash) => {
@@ -234,11 +274,14 @@ export default function CarVisualization({
       ctx.restore();
 
       // ---------------------------------------------------------
-      // 3. CAR HERO VISUALIZATION (ROTATED TO CAR HEADING)
+      // 3. CAR HERO VISUALIZATION (ROTATED TO CAR HEADING & 360 PIVOT)
       // ---------------------------------------------------------
       ctx.save();
       ctx.translate(centerX, centerY + sim.suspensionPitch);
-      ctx.rotate((sim.carHeading * Math.PI) / 180);
+
+      // Smooth combined heading: standard steer yaw + full 360 in-place pivot angle!
+      const totalHeadingDeg = sim.carHeading + (isRotating360 ? rotationAngle : 0);
+      ctx.rotate((totalHeadingDeg * Math.PI) / 180);
 
       // A. VOLUMETRIC PROJECTOR HEADLIGHTS (When headlights are ON)
       if (headlights) {
@@ -286,7 +329,6 @@ export default function CarVisualization({
       const isBrakingActive = isBraking || (throttle < 0 && gear !== 'R');
 
       if (isBrakingActive) {
-        // Ruby Red Ground Reflection Bloom
         const brakeBloom = ctx.createRadialGradient(0, 96, 10, 0, 120, 110);
         brakeBloom.addColorStop(0, 'rgba(244, 63, 94, 0.42)');
         brakeBloom.addColorStop(0.5, 'rgba(244, 63, 94, 0.15)');
@@ -296,7 +338,6 @@ export default function CarVisualization({
         ctx.ellipse(0, 110, 85, 45, 0, 0, Math.PI * 2);
         ctx.fill();
       } else if (isReverse) {
-        // Bright Cool White Reverse Lamp Ground Pool
         const revBloom = ctx.createRadialGradient(0, 90, 8, 0, 110, 80);
         revBloom.addColorStop(0, 'rgba(255, 255, 255, 0.45)');
         revBloom.addColorStop(0.5, 'rgba(255, 255, 255, 0.15)');
@@ -307,30 +348,28 @@ export default function CarVisualization({
         ctx.fill();
       }
 
-      // C. THEME ACCENT UNDERGLOW (Subtle neon ground reflection under rocker panels)
+      // C. THEME ACCENT UNDERGLOW
       const underglowGrad = ctx.createRadialGradient(0, 6, 24, 0, 6, 85);
-      underglowGrad.addColorStop(0, 'rgba(0, 216, 246, 0.16)');
-      underglowGrad.addColorStop(0.6, 'rgba(0, 216, 246, 0.05)');
+      underglowGrad.addColorStop(0, isRotating360 ? 'rgba(0, 216, 246, 0.32)' : 'rgba(0, 216, 246, 0.16)');
+      underglowGrad.addColorStop(0.6, isRotating360 ? 'rgba(0, 216, 246, 0.1)' : 'rgba(0, 216, 246, 0.05)');
       underglowGrad.addColorStop(1, 'transparent');
       ctx.fillStyle = underglowGrad;
       ctx.beginPath();
       ctx.ellipse(0, 6, 52, 90, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // D. MULTI-LAYER REALISTIC VEHICLE CONTACT SHADOW
-      // Layer 1: Soft diffuse chassis shadow
+      // D. VEHICLE CONTACT SHADOW
       ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
       ctx.beginPath();
       ctx.ellipse(0, 8, 54, 94, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Layer 2: Tight dark ambient occlusion contact shadow directly under body
       ctx.fillStyle = 'rgba(0, 0, 0, 0.88)';
       ctx.beginPath();
       ctx.ellipse(0, 4, 46, 82, 0, 0, Math.PI * 2);
       ctx.fill();
 
-      // Contact shadows directly under tires
+      // Tire Contact Shadows
       const drawTireShadow = (tx, ty) => {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.95)';
         ctx.beginPath();
@@ -342,17 +381,27 @@ export default function CarVisualization({
       drawTireShadow(-41, 48);
       drawTireShadow(41, 48);
 
-      // E. FOUR WHEELS WITH STEERING PIVOT, BRAKE ROTORS & CALIPERS
-      const drawWheel = (x, y, isFront, steerAngle) => {
+      // E. FOUR INDEPENDENT WHEELS (WITH 360° PIVOT 4WD ROTATION DEMONSTRATION)
+      const drawWheel = (x, y, isFront, steerAngle, isLeftWheel) => {
         ctx.save();
         ctx.translate(x, y);
 
-        // Front wheels pivot realistically with steering!
-        if (isFront) {
-          ctx.rotate((steerAngle * Math.PI) / 180);
+        // During 360° pivot: wheels pivot tangentially to the circle to demonstrate in-place rotation!
+        let effectiveSteer = steerAngle;
+        let wheelSpinDir = 1;
+
+        if (isRotating360) {
+          // Tangential angle for in-place circular rotation
+          effectiveSteer = isFront
+            ? (isLeftWheel ? -24 : 24)
+            : (isLeftWheel ? 24 : -24);
+          // Left wheels drive forward, right wheels drive reverse (4WD differential pivot!)
+          wheelSpinDir = isLeftWheel ? 1 : -1;
         }
 
-        // Tire Outer Rubber with 3D bevel
+        ctx.rotate((effectiveSteer * Math.PI) / 180);
+
+        // Tire Outer Rubber
         const tireGrad = ctx.createLinearGradient(-7, 0, 7, 0);
         tireGrad.addColorStop(0, '#0a0d13');
         tireGrad.addColorStop(0.25, '#191f2c');
@@ -366,10 +415,11 @@ export default function CarVisualization({
         ctx.fill();
         ctx.stroke();
 
-        // Tire Tread Grooves (Smoothly cycling with wheelSpin)
+        // Tire Tread Grooves
         ctx.strokeStyle = '#0d1118';
         ctx.lineWidth = 1.4;
-        const treadY = (sim.wheelSpin * 16) % 7;
+        const spinOffset = isRotating360 ? (sim.pivotParticleOffset * 8 * wheelSpinDir) : (sim.wheelSpin * 16);
+        const treadY = spinOffset % 7;
         for (let ty = -14 + treadY; ty < 14; ty += 7) {
           ctx.beginPath();
           ctx.moveTo(-6, ty);
@@ -377,7 +427,7 @@ export default function CarVisualization({
           ctx.stroke();
         }
 
-        // Drilled Carbon-Ceramic Brake Rotor Disc
+        // Brake Rotor
         const rotorGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, 8);
         rotorGrad.addColorStop(0, '#4a5568');
         rotorGrad.addColorStop(0.8, '#2d3748');
@@ -387,31 +437,32 @@ export default function CarVisualization({
         ctx.arc(0, 0, 8, 0, Math.PI * 2);
         ctx.fill();
 
-        // High-Performance Electric Cyan Brake Caliper
+        // Brake Caliper
         ctx.fillStyle = '#00d8f6';
         ctx.beginPath();
         ctx.roundRect(-4.5, -7, 4.5, 9, 1.5);
         ctx.fill();
 
-        // Multi-Spoke Titanium Alloy Rim
+        // Multi-Spoke Rim
         ctx.strokeStyle = '#8a99ad';
         ctx.lineWidth = 1.2;
+        const rimAngleOffset = isRotating360 ? (sim.pivotParticleOffset * 3 * wheelSpinDir) : (sim.wheelSpin * 0.5);
         for (let s = 0; s < 5; s++) {
-          const spAngle = (s * Math.PI * 2) / 5 + sim.wheelSpin * 0.5;
+          const spAngle = (s * Math.PI * 2) / 5 + rimAngleOffset;
           ctx.beginPath();
           ctx.moveTo(0, 0);
           ctx.lineTo(Math.cos(spAngle) * 7.5, Math.sin(spAngle) * 7.5);
           ctx.stroke();
         }
 
-        // Rim Outer Polished Lip
+        // Rim Lip
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.arc(0, 0, 7.5, 0, Math.PI * 2);
         ctx.stroke();
 
-        // Anodized Center Hub Nut
+        // Center Nut
         ctx.fillStyle = '#00d8f6';
         ctx.shadowColor = '#00d8f6';
         ctx.shadowBlur = 4;
@@ -423,39 +474,35 @@ export default function CarVisualization({
         ctx.restore();
       };
 
-      // Render front wheels (Steerable)
-      drawWheel(-39, -46, true, sim.wheelPivot);
-      drawWheel(39, -46, true, sim.wheelPivot);
-
-      // Render rear wheels (Fixed)
-      drawWheel(-41, 48, false, 0);
-      drawWheel(41, 48, false, 0);
+      // 4 Wheels: Front Left, Front Right, Rear Left, Rear Right
+      drawWheel(-39, -46, true, sim.wheelPivot, true);
+      drawWheel(39, -46, true, sim.wheelPivot, false);
+      drawWheel(-41, 48, false, 0, true);
+      drawWheel(41, 48, false, 0, false);
 
       // ---------------------------------------------------------
-      // F. LAMBORGHINI SUPERCAR CHASSIS (Detailed Vector Sculpt)
+      // F. LAMBORGHINI SUPERCAR CHASSIS VECTOR SCULPT
       // ---------------------------------------------------------
       ctx.save();
-      // Apply subtle body roll
       ctx.rotate((sim.bodyRoll * Math.PI) / 180);
 
       // 1. CARBON FIBER AERODYNAMIC UNDERBODY & SPLITTERS
       ctx.beginPath();
-      // Front carbon splitter
-      ctx.moveTo(0, -92);       // Sharp central aero fang
+      ctx.moveTo(0, -92);
       ctx.lineTo(-24, -86);
-      ctx.lineTo(-37, -81);     // Left front aero canard winglet
-      ctx.lineTo(-39, -68);     // Front wheel arch relief
+      ctx.lineTo(-37, -81);
+      ctx.lineTo(-39, -68);
       ctx.lineTo(-44, -46);
-      ctx.lineTo(-38, -26);     // Side skirt intake channel
-      ctx.lineTo(-37, 24);      // Sculpted carbon rocker panel
-      ctx.lineTo(-44, 46);      // Rear wheel arch flare
-      ctx.lineTo(-44, 68);
-      ctx.lineTo(-38, 86);      // Rear aero winglet
-      ctx.lineTo(-26, 92);      // Diffuser corner
-      ctx.lineTo(0, 93);        // Rear center undertray
-      ctx.lineTo(26, 92);
-      ctx.lineTo(38, 86);
-      ctx.lineTo(44, 68);
+      ctx.lineTo(-38, -26);
+      ctx.lineTo(-37, 24);
+      ctx.lineTo(-44, 46);
+      ctx.lineTo(-41, 68);
+      ctx.lineTo(-36, 78);
+      ctx.lineTo(-24, 88);
+      ctx.lineTo(0, 92);
+      ctx.lineTo(24, 88);
+      ctx.lineTo(36, 78);
+      ctx.lineTo(41, 68);
       ctx.lineTo(44, 46);
       ctx.lineTo(37, 24);
       ctx.lineTo(38, -26);
@@ -464,43 +511,32 @@ export default function CarVisualization({
       ctx.lineTo(37, -81);
       ctx.lineTo(24, -86);
       ctx.closePath();
-
-      // Deep Matte Carbon Undertray
-      ctx.fillStyle = '#07090e';
+      ctx.fillStyle = '#05070a';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(0, 216, 246, 0.25)';
-      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#00d8f6';
+      ctx.lineWidth = 1.2;
       ctx.stroke();
 
-      // 2. MAIN SCULPTED BODY SHELL (Metallic Obsidian Titanium Finish)
+      // 2. MAIN SCULPTED CHASSIS BODY
       ctx.beginPath();
-      ctx.moveTo(0, -88);       // Nose apex (Lamborghini wedge)
-      ctx.lineTo(-18, -82);     // Front left nose contour
-      ctx.lineTo(-28, -72);     // Headlight corner
-      ctx.lineTo(-35, -54);     // Front muscular fender peak
-      ctx.lineTo(-36, -34);     // Fender drop
-      ctx.lineTo(-30, -18);     // Waist intake tuck
-      ctx.lineTo(-28, 12);      // Door panel recess
-      ctx.lineTo(-39, 36);      // Muscular rear haunch intake scoop
-      ctx.lineTo(-41, 56);      // Wide rear shoulder
-      ctx.lineTo(-36, 76);      // Rear quarter endplate
-      ctx.lineTo(-26, 85);      // Rear bumper corner
-      ctx.lineTo(-12, 88);      // Rear diffuser flange
-      ctx.lineTo(0, 89);        // Tail center
-      ctx.lineTo(12, 88);
-      ctx.lineTo(26, 85);
-      ctx.lineTo(36, 76);
-      ctx.lineTo(41, 56);
-      ctx.lineTo(39, 36);
-      ctx.lineTo(28, 12);
-      ctx.lineTo(30, -18);
-      ctx.lineTo(36, -34);
-      ctx.lineTo(35, -54);
-      ctx.lineTo(28, -72);
+      ctx.moveTo(0, -89);
+      ctx.lineTo(-18, -82);
+      ctx.lineTo(-32, -76);
+      ctx.lineTo(-34, -40);
+      ctx.lineTo(-31, 0);
+      ctx.lineTo(-34, 42);
+      ctx.lineTo(-33, 72);
+      ctx.lineTo(-18, 83);
+      ctx.lineTo(0, 86);
+      ctx.lineTo(18, 83);
+      ctx.lineTo(33, 72);
+      ctx.lineTo(34, 42);
+      ctx.lineTo(31, 0);
+      ctx.lineTo(34, -40);
+      ctx.lineTo(32, -76);
       ctx.lineTo(18, -82);
       ctx.closePath();
 
-      // Multi-stop metallic titanium gradient
       const bodyGrad = ctx.createLinearGradient(-42, 0, 42, 0);
       bodyGrad.addColorStop(0, '#0c1017');
       bodyGrad.addColorStop(0.2, '#18212e');
@@ -509,14 +545,11 @@ export default function CarVisualization({
       bodyGrad.addColorStop(1, '#0c1017');
       ctx.fillStyle = bodyGrad;
       ctx.fill();
-
-      // Electric Cyan Primary Accent Edge Chamfer
       ctx.strokeStyle = '#00d8f6';
       ctx.lineWidth = 1.3;
       ctx.stroke();
 
-      // 3. FRONT HOOD & AERODYNAMIC AIR EXTRACTORS (Y-GEOMETRY)
-      // Center hood spine
+      // 3. FRONT HOOD & AERODYNAMIC S-DUCTS
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -524,7 +557,6 @@ export default function CarVisualization({
       ctx.lineTo(0, -42);
       ctx.stroke();
 
-      // Dual sculpted hood vents (Aero S-Duct extractors)
       const drawHoodVent = (isLeft) => {
         const sign = isLeft ? -1 : 1;
         ctx.fillStyle = '#07090e';
@@ -538,21 +570,11 @@ export default function CarVisualization({
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
-
-        // Vent grille louvers
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-        ctx.lineWidth = 0.8;
-        ctx.beginPath();
-        ctx.moveTo(sign * 8, -64);
-        ctx.lineTo(sign * 16, -56);
-        ctx.moveTo(sign * 7, -56);
-        ctx.lineTo(sign * 15, -50);
-        ctx.stroke();
       };
       drawHoodVent(true);
       drawHoodVent(false);
 
-      // Lamborghini Front Hood Crest Badge (Gold / Yellow Hex Shield)
+      // Gold Lambo Hex Badge
       ctx.fillStyle = '#f59e0b';
       ctx.beginPath();
       ctx.moveTo(0, -80);
@@ -564,7 +586,25 @@ export default function CarVisualization({
       ctx.closePath();
       ctx.fill();
 
-      // 4. SCULPTED SIDE INTERCOOLER / RADIATOR AIR INTAKES
+      // 4. FRONT TCRT5000 IR LINE SENSOR INDICATORS (Under Front Nose)
+      const lineSensors = telemetry?.lineSensors || { left: false, center: true, right: false };
+      const drawLineTrackerLed = (xPos, isDetecting) => {
+        ctx.save();
+        ctx.fillStyle = isDetecting ? '#00d8f6' : 'rgba(255, 255, 255, 0.15)';
+        if (isDetecting) {
+          ctx.shadowColor = '#00d8f6';
+          ctx.shadowBlur = 6;
+        }
+        ctx.beginPath();
+        ctx.arc(xPos, -89, 1.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      };
+      drawLineTrackerLed(-10, lineSensors.left);
+      drawLineTrackerLed(0, lineSensors.center);
+      drawLineTrackerLed(10, lineSensors.right);
+
+      // 5. SIDE AIR INTAKES
       const drawSideIntake = (isLeft) => {
         const sign = isLeft ? -1 : 1;
         ctx.fillStyle = '#06080d';
@@ -578,22 +618,11 @@ export default function CarVisualization({
         ctx.closePath();
         ctx.fill();
         ctx.stroke();
-
-        // Mesh pattern lines inside scoop
-        ctx.strokeStyle = 'rgba(0, 216, 246, 0.18)';
-        ctx.lineWidth = 0.8;
-        ctx.beginPath();
-        ctx.moveTo(sign * 30, 8);
-        ctx.lineTo(sign * 36, 24);
-        ctx.moveTo(sign * 28, 18);
-        ctx.lineTo(sign * 34, 30);
-        ctx.stroke();
       };
       drawSideIntake(true);
       drawSideIntake(false);
 
-      // 5. COCKPIT CANOPY (Dark Tinted Glass + Realistic Specular Sheen)
-      // Windshield & Roof Frame
+      // 6. COCKPIT CANOPY & SUNROOF HATCH (REVEALS ARDUINO NANO BAY)
       const glassGrad = ctx.createLinearGradient(0, -40, 0, 30);
       glassGrad.addColorStop(0, 'rgba(18, 26, 38, 0.96)');
       glassGrad.addColorStop(0.35, 'rgba(8, 12, 18, 0.98)');
@@ -601,11 +630,11 @@ export default function CarVisualization({
       glassGrad.addColorStop(1, 'rgba(6, 9, 14, 0.98)');
 
       ctx.beginPath();
-      ctx.moveTo(0, -38);       // Windshield front peak
-      ctx.lineTo(-17, -26);     // A-pillar base
-      ctx.lineTo(-20, 14);      // B-pillar curve
-      ctx.lineTo(-16, 30);      // C-pillar rear glass
-      ctx.lineTo(0, 32);        // Rear window center
+      ctx.moveTo(0, -38);
+      ctx.lineTo(-17, -26);
+      ctx.lineTo(-20, 14);
+      ctx.lineTo(-16, 30);
+      ctx.lineTo(0, 32);
       ctx.lineTo(16, 30);
       ctx.lineTo(20, 14);
       ctx.lineTo(17, -26);
@@ -616,7 +645,52 @@ export default function CarVisualization({
       ctx.lineWidth = 1.1;
       ctx.stroke();
 
-      // Diagonal Specular Reflection across windshield
+      // SUNROOF MECHANISM (Access hatch for Arduino Nano)
+      const isSunroofOpen = sunroof.state === 'OPEN' || sunroof.state === 'OPENING';
+      const roofSlideOffset = isSunroofOpen ? 18 : 0;
+
+      // Interior bay revealed when sunroof is open
+      if (isSunroofOpen) {
+        // Exposed Arduino Nano bay
+        ctx.fillStyle = '#0a1017';
+        ctx.strokeStyle = 'rgba(0, 216, 246, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.roundRect(-10, -18, 20, 22, 2);
+        ctx.fill();
+        ctx.stroke();
+
+        // Arduino Nano Micro PCB Silhouette
+        ctx.fillStyle = '#0d2838';
+        ctx.fillRect(-8, -16, 16, 18);
+
+        // ATmega328P Chip & LED indicator
+        ctx.fillStyle = '#050a0f';
+        ctx.fillRect(-4, -10, 8, 8);
+
+        // Blinking Nano Power / Status LED
+        ctx.fillStyle = '#10b981';
+        ctx.shadowColor = '#10b981';
+        ctx.shadowBlur = 4;
+        ctx.beginPath();
+        ctx.arc(4, -13, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      // Sliding Sunroof Glass Panel
+      ctx.save();
+      ctx.translate(0, roofSlideOffset);
+      ctx.fillStyle = isSunroofOpen ? 'rgba(0, 216, 246, 0.15)' : 'rgba(10, 16, 26, 0.95)';
+      ctx.strokeStyle = 'rgba(0, 216, 246, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(-11, -20, 22, 18, 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+
+      // Specular sheen across canopy
       const sheenGrad = ctx.createLinearGradient(-18, -36, 16, -10);
       sheenGrad.addColorStop(0, 'transparent');
       sheenGrad.addColorStop(0.4, 'rgba(255, 255, 255, 0.16)');
@@ -631,27 +705,17 @@ export default function CarVisualization({
       ctx.closePath();
       ctx.fill();
 
-      // Gloss Carbon Center Roof Rib & Cockpit Divider
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, -22);
-      ctx.lineTo(0, 24);
-      ctx.stroke();
-
-      // Sleek Carbon Aero Side Mirrors
+      // Side mirrors
       const drawMirror = (isLeft) => {
         const sign = isLeft ? -1 : 1;
         ctx.save();
         ctx.translate(sign * 26, -24);
-        // Stalk
         ctx.strokeStyle = '#0e131c';
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(0, 0);
         ctx.lineTo(sign * 8, -4);
         ctx.stroke();
-        // Mirror housing
         ctx.fillStyle = '#161c28';
         ctx.strokeStyle = '#00d8f6';
         ctx.lineWidth = 0.9;
@@ -659,18 +723,12 @@ export default function CarVisualization({
         ctx.ellipse(sign * 9, -5, 4.5, 2.5, sign * 0.4, 0, Math.PI * 2);
         ctx.fill();
         ctx.stroke();
-        // Mirror Glass Reflective Face
-        ctx.fillStyle = '#38edff';
-        ctx.beginPath();
-        ctx.ellipse(sign * 9, -4.5, 3, 1.2, sign * 0.4, 0, Math.PI * 2);
-        ctx.fill();
         ctx.restore();
       };
       drawMirror(true);
       drawMirror(false);
 
-      // 6. REAR MID-ENGINE DECK & TITANIUM CROSS BRACE
-      // Engine Bay Louvers (Slatted Glass / Hexagonal Hood Cover)
+      // 7. REAR ENGINE DECK & DUAL EXHAUST
       ctx.fillStyle = '#080b11';
       ctx.strokeStyle = 'rgba(0, 216, 246, 0.22)';
       ctx.lineWidth = 0.9;
@@ -684,29 +742,7 @@ export default function CarVisualization({
       ctx.fill();
       ctx.stroke();
 
-      // Titanium X-Brace over Engine Bay
-      ctx.strokeStyle = 'rgba(200, 220, 240, 0.35)';
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      ctx.moveTo(-11, 38);
-      ctx.lineTo(11, 56);
-      ctx.moveTo(11, 38);
-      ctx.lineTo(-11, 56);
-      ctx.stroke();
-
-      // Engine Deck Cooling Slats
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-      ctx.lineWidth = 1;
-      [42, 48, 54, 60].forEach((yPos) => {
-        ctx.beginPath();
-        ctx.moveTo(-10, yPos);
-        ctx.lineTo(10, yPos);
-        ctx.stroke();
-      });
-
-      // 7. HIGH-MOUNTED DUAL HEXAGONAL EXHAUST OUTLETS
       const drawExhaust = (xPos) => {
-        // Hexagonal Exhaust Bezel
         ctx.fillStyle = '#0a0d14';
         ctx.strokeStyle = '#384252';
         ctx.lineWidth = 1.2;
@@ -715,7 +751,6 @@ export default function CarVisualization({
         ctx.fill();
         ctx.stroke();
 
-        // Glowing Core Interior (Cyan Heat Discoloration / Pop on high throttle)
         const exhaustGlow = throttle > 60 ? '#38edff' : '#00d8f6';
         ctx.fillStyle = exhaustGlow;
         ctx.shadowColor = exhaustGlow;
@@ -728,7 +763,7 @@ export default function CarVisualization({
       drawExhaust(-9);
       drawExhaust(9);
 
-      // 8. ACTIVE AERODYNAMIC REAR CARBON WING (SVJ / Revuelto Style)
+      // Rear Wing
       ctx.fillStyle = '#0d121a';
       ctx.strokeStyle = '#00d8f6';
       ctx.lineWidth = 1.4;
@@ -741,18 +776,16 @@ export default function CarVisualization({
       ctx.fill();
       ctx.stroke();
 
-      // Wing Aero Endplates
       ctx.fillStyle = '#00d8f6';
       ctx.fillRect(-39, 75, 2.5, 10);
       ctx.fillRect(36.5, 75, 2.5, 10);
 
-      // 9. SIGNATURE Y-SHAPED FRONT HEADLIGHTS (DRLs & PROJECTORS)
+      // 8. SIGNATURE Y-HEADLIGHTS
       const drawHeadlight = (isLeft) => {
         const sign = isLeft ? -1 : 1;
         ctx.save();
         ctx.translate(sign * 25, -69);
 
-        // Lamborghini Signature Y-Shaped LED DRL Ribbon
         const drlColor = headlights ? '#ffffff' : 'rgba(0, 216, 246, 0.85)';
         ctx.strokeStyle = drlColor;
         ctx.lineWidth = headlights ? 2.0 : 1.4;
@@ -761,7 +794,6 @@ export default function CarVisualization({
           ctx.shadowBlur = 10;
         }
 
-        // Distinctive Y-shape pointing forward & inward
         ctx.beginPath();
         ctx.moveTo(sign * 4, -8);
         ctx.lineTo(0, 0);
@@ -771,7 +803,6 @@ export default function CarVisualization({
         ctx.stroke();
         ctx.shadowBlur = 0;
 
-        // Projector Lens (Intense white bead when ON)
         if (headlights) {
           ctx.fillStyle = '#ffffff';
           ctx.shadowColor = '#ffffff';
@@ -787,20 +818,18 @@ export default function CarVisualization({
       drawHeadlight(true);
       drawHeadlight(false);
 
-      // 10. REAR TAILLIGHTS (SIGNATURE Y-LEDs / BRAKE / REVERSE)
+      // 9. REAR TAILLIGHTS (Brake, Running, Reverse)
       const drawRearTaillight = (isLeft) => {
         const sign = isLeft ? -1 : 1;
         ctx.save();
         ctx.translate(sign * 22, 85);
 
         if (isBrakingActive) {
-          // Intense Ruby Red Brake Glow + Bloom
           ctx.strokeStyle = '#ff1e4a';
           ctx.lineWidth = 3.2;
           ctx.shadowColor = '#ff1e4a';
           ctx.shadowBlur = 18;
           ctx.beginPath();
-          // Horizontal Y-ribbon
           ctx.moveTo(sign * -12, 0);
           ctx.lineTo(0, 0);
           ctx.lineTo(sign * 10, -4);
@@ -809,7 +838,6 @@ export default function CarVisualization({
           ctx.stroke();
           ctx.shadowBlur = 0;
         } else {
-          // Sleek Running LED Markers
           ctx.strokeStyle = 'rgba(244, 63, 94, 0.75)';
           ctx.lineWidth = 1.8;
           ctx.shadowColor = 'rgba(244, 63, 94, 0.5)';
@@ -824,7 +852,6 @@ export default function CarVisualization({
           ctx.shadowBlur = 0;
         }
 
-        // Reverse White LED segments
         if (isReverse) {
           ctx.fillStyle = '#ffffff';
           ctx.shadowColor = '#ffffff';
@@ -840,18 +867,7 @@ export default function CarVisualization({
       drawRearTaillight(true);
       drawRearTaillight(false);
 
-      // Center high-mounted brake light (CHMSL)
-      if (isBrakingActive) {
-        ctx.fillStyle = '#ff1e4a';
-        ctx.shadowColor = '#ff1e4a';
-        ctx.shadowBlur = 14;
-        ctx.beginPath();
-        ctx.roundRect(-8, 73, 16, 2.5, 1);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-      }
-
-      // 11. MIST AEROSOL PARTICLES (From Rear Diffuser)
+      // 10. MIST AEROSOL PARTICLES
       if (mist) {
         for (let i = 0; i < 3; i++) {
           const side = Math.random() < 0.5 ? -18 : 18;
@@ -890,7 +906,25 @@ export default function CarVisualization({
         ctx.fill();
       }
 
-      ctx.restore(); // Restore car rotation & translation
+      // 11. ULTRASONIC COLLISION SONAR WARNING (Ahead of front bumper)
+      const obstacleDist = telemetry?.obstacleDistance || 45;
+      if (telemetry?.obstacleDetected || obstacleDist <= 25) {
+        const isCritical = obstacleDist <= 12;
+        const sonarColor = isCritical ? 'rgba(244, 63, 94, 0.85)' : 'rgba(245, 158, 11, 0.75)';
+
+        for (let a = 1; a <= 3; a++) {
+          ctx.strokeStyle = sonarColor;
+          ctx.lineWidth = 1.6;
+          ctx.shadowColor = isCritical ? '#f43f5e' : '#f59e0b';
+          ctx.shadowBlur = 8;
+          ctx.beginPath();
+          ctx.arc(0, -90, 18 + a * 12, -Math.PI * 0.75, -Math.PI * 0.25);
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      ctx.restore(); // Restore car transformation
 
       // ---------------------------------------------------------
       // 4. HORN ACOUSTIC SONIC SHOCKWAVES
@@ -898,7 +932,7 @@ export default function CarVisualization({
       if (horn) {
         ctx.save();
         ctx.translate(centerX, centerY - 65);
-        ctx.rotate((sim.carHeading * Math.PI) / 180);
+        ctx.rotate((totalHeadingDeg * Math.PI) / 180);
 
         [0, 0.4].forEach((offset) => {
           const wavePhase = (sim.hornWave + offset) % 1.0;
@@ -928,9 +962,25 @@ export default function CarVisualization({
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [throttle, steering, headlights, horn, mist, speedKmh, isBraking, gear]);
+  }, [
+    throttle,
+    steering,
+    headlights,
+    horn,
+    mist,
+    speedKmh,
+    isBraking,
+    gear,
+    isRotating360,
+    rotationAngle,
+    sunroof,
+    telemetry,
+    emergencyStopActive
+  ]);
 
   const headingDeg = Math.round(steering * 0.28);
+  const isObstacle = telemetry?.obstacleDetected;
+  const isSafetyStop = telemetry?.safetyStop;
 
   return (
     <div
@@ -953,40 +1003,55 @@ export default function CarVisualization({
         }}
       />
 
-      {/* TOP: Front Heading Tag */}
+      {/* TOP: Front Heading Tag & Proximity Sonar Warning */}
       <div
         style={{
           position: 'absolute',
-          top: 'clamp(8px, 2vh, 16px)',
+          top: 'clamp(6px, 1.8vh, 14px)',
           left: '50%',
           transform: 'translateX(-50%)',
           display: 'flex',
           alignItems: 'center',
-          gap: '6px',
+          gap: '8px',
           fontFamily: 'var(--font-mono)',
           fontSize: '10px',
           letterSpacing: '2px',
-          color: 'var(--text-dim)',
-          pointerEvents: 'none'
+          color: isSafetyStop
+            ? 'var(--status-red)'
+            : isObstacle
+            ? 'var(--status-amber)'
+            : 'var(--text-dim)',
+          pointerEvents: 'none',
+          backgroundColor: isSafetyStop ? 'rgba(244, 63, 94, 0.12)' : 'transparent',
+          padding: '2px 8px',
+          borderRadius: '4px'
         }}
       >
-        <span style={{ color: 'var(--accent)', fontSize: '11px' }}>▲</span>
-        <span>FRONT ORIENTATION</span>
+        <span style={{ color: isSafetyStop ? 'var(--status-red)' : 'var(--accent)', fontSize: '11px' }}>▲</span>
+        <span>
+          {isSafetyStop
+            ? `PROXIMITY SAFETY STOP (${telemetry.obstacleDistance}cm)`
+            : isObstacle
+            ? `OBSTACLE DETECTED (${telemetry.obstacleDistance}cm)`
+            : isRotating360
+            ? '360° DIFFERENTIAL PIVOT'
+            : 'FRONT ORIENTATION'}
+        </span>
       </div>
 
       {/* BOTTOM CENTER: Integrated Telemetry Pill */}
       <div
         style={{
           position: 'absolute',
-          bottom: 'clamp(8px, 2vh, 16px)',
+          bottom: 'clamp(6px, 1.8vh, 14px)',
           left: '50%',
           transform: 'translateX(-50%)',
           display: 'flex',
           alignItems: 'center',
-          gap: 'clamp(12px, 3vw, 24px)',
-          padding: '4px 18px',
+          gap: 'clamp(10px, 2.5vw, 20px)',
+          padding: '4px 16px',
           backgroundColor: 'rgba(7, 9, 13, 0.88)',
-          border: '1px solid var(--border-hairline)',
+          border: `1px solid ${emergencyStopActive ? 'var(--status-red)' : 'var(--border-hairline)'}`,
           borderRadius: '4px',
           backdropFilter: 'blur(8px)',
           boxShadow: '0 4px 16px rgba(0, 0, 0, 0.5)',
@@ -998,7 +1063,7 @@ export default function CarVisualization({
           <span
             style={{
               fontFamily: 'var(--font-brand)',
-              fontSize: 'clamp(20px, 4vw, 26px)',
+              fontSize: 'clamp(18px, 3.8vw, 24px)',
               fontWeight: 900,
               color: '#ffffff',
               lineHeight: 1
@@ -1016,10 +1081,26 @@ export default function CarVisualization({
           GEAR: <strong style={{ color: gear === 'R' ? 'var(--status-red)' : 'var(--accent)' }}>{gear}</strong>
         </div>
 
-        {/* Steer Angle */}
+        {/* Steer Angle or 360 Pivot Status */}
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' }}>
-          STEER: <strong style={{ color: '#ffffff' }}>{headingDeg > 0 ? `+${headingDeg}°` : `${headingDeg}°`}</strong>
+          {isRotating360 ? (
+            <span style={{ color: 'var(--accent)', fontWeight: 'bold' }}>360° PIVOT</span>
+          ) : (
+            <>STEER: <strong style={{ color: '#ffffff' }}>{headingDeg > 0 ? `+${headingDeg}°` : `${headingDeg}°`}</strong></>
+          )}
         </div>
+
+        {/* Sonar Distance */}
+        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', color: isObstacle ? 'var(--status-amber)' : 'var(--text-dim)' }}>
+          SONAR: {telemetry?.obstacleDistance || 45}cm
+        </div>
+
+        {/* Sunroof Badge */}
+        {sunroof?.state !== 'CLOSED' && (
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--accent)' }}>
+            ROOF: {sunroof.state}
+          </div>
+        )}
       </div>
     </div>
   );
